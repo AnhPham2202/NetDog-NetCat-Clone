@@ -1,10 +1,27 @@
 import getopt
+import os
 import subprocess
 import sys
 import socket
 import threading
+import chardet
 
 from _socket import SocketType
+
+listen = False
+execute = ""
+port: int
+command = ""
+upload_destination = ""
+target = ""
+
+
+def recv_custom(client_socket: SocketType) -> str:
+    return client_socket.recv(1024).decode()
+
+
+def send_custom(client_socket: SocketType, msg: str) -> int:
+    return client_socket.send(msg.encode())
 
 
 def usage():
@@ -33,7 +50,7 @@ def main():
     global command
     global upload_destination
     global target
-
+    print("main")
     # Check args if valid or not
     if not (len(sys.argv[1:])):
         usage()
@@ -81,7 +98,7 @@ def send_data(buffer):
         client.connect((target, port))
         # send data
         if len(buffer):
-            client.send(buffer)
+            client.send(buffer.encode())
         while True:
             recv_len = 1
             response = ""
@@ -89,7 +106,7 @@ def send_data(buffer):
             while recv_len:
                 data = client.recv(4096)
                 recv_len = len(data)
-                response += data
+                response += data.decode()
 
                 # last data packet
                 if recv_len < 4096:
@@ -99,10 +116,10 @@ def send_data(buffer):
             buffer = input("")
             buffer += "\n"
 
-            client.send(buffer)
+            client.send(buffer.encode())
 
-    except:
-        print("[*] Exception! Exiting.")
+    except Exception as e:
+        print(e)
         # tear down the connection
         client.close()
 
@@ -121,12 +138,23 @@ def server_loop():
         client_thread = threading.Thread(target=client_handler, args=(client_socket,))
         client_thread.start()
 
+
 def run_command(command: str) -> str:
     command = command.rstrip()
+    # subprocess.call() creates a new process.The cd works in that process, but when the process exits it won't
+    # affect the current process. This is how processes are designed to work. If you need your script to change to a
+    # different directory you can use os.chdir which will change the directory for the current process.
     try:
-        return subprocess.check_output(command,stderr=subprocess.STDOUT, shell=True)
-    except:
-        return "Failed to execute command.\r\n"
+        # if
+        # if command[0:3] is "cd ":
+        #     os.chdir().
+        byte = subprocess.check_output(command, stderr=subprocess.STDOUT, shell=True)
+        the_encoding = chardet.detect(byte)['encoding']
+
+        return byte.decode(the_encoding)
+    except Exception as e:
+        return e
+
 
 def client_handler(client_socket: SocketType):
     global upload
@@ -137,7 +165,7 @@ def client_handler(client_socket: SocketType):
     if len(upload_destination):
         file_buffer = ""
         while True:
-            data = client_socket.recv(1024)
+            data = recv_custom(client_socket)
             if not data:
                 break
             else:
@@ -149,11 +177,23 @@ def client_handler(client_socket: SocketType):
             file_descriptor.write(file_buffer)
             file_descriptor.close()
         except:
-            client_socket.send("Failed to save file to %s\r\n" %upload_destination)
+            client_socket.send("Failed to save file to %s\r\n" % upload_destination)
 
     # check for execute
     if len(execute):
-        client_socket.send(run_command(execute))
+        send_custom(client_socket, run_command(execute))
+    if command:
+        # wait til command send then execute 
+        while True:
+            # send_custom(client_socket, "NetDog: #> ")
+            # client_socket.send("NetDog: #> ".encode())
+            cmd_buffer: str = ""
+
+            while "\n" not in cmd_buffer:
+                # cmd_buffer += recv_custom(client_socket)
+                cmd_buffer += client_socket.recv(1024).decode()
+            client_socket.send(run_command(cmd_buffer).encode())
+            # send_custom(client_socket, run_command(cmd_buffer))
 
 
 main()
