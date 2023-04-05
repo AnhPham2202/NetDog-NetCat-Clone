@@ -14,6 +14,7 @@ port: int
 command = ""
 upload_destination = ""
 target = ""
+file = ""
 
 
 def recv_custom(client_socket: SocketType) -> str:
@@ -31,8 +32,7 @@ def usage():
     print("-l --listen - listen on [host]:[port] for incoming connections")
     print("-e --execute=file_to_run - execute the given file upon receiving a connection")
     print("-c --command - initialize a command shell")
-    print(
-        "-u --upload=destination - upon receiving connection upload a file and write to [destination]")
+    print("-u --upload=destination - upon receiving connection upload a file and write to [destination]")
     print("")
     print("")
     print("Examples: ")
@@ -50,13 +50,15 @@ def main():
     global command
     global upload_destination
     global target
+    global file
+
     print("main")
     # Check args if valid or not
     if not (len(sys.argv[1:])):
         usage()
     # read the commandline options
-    opts, args = getopt.getopt(sys.argv[1:], "hle:p:cu:t:",
-                               ["help", "listen", "execute", "port", "command", "upload", "target"])
+    opts, args = getopt.getopt(sys.argv[1:], "hle:p:cu:t:f:",
+                               ["help", "listen", "execute", "port", "command", "upload", "target", "file"])
 
     for o, a in opts:
         if o in ("-h", "--help"):
@@ -73,13 +75,20 @@ def main():
             target = a
         elif o in ("-p", "--port"):
             port = int(a)
+        elif o in ("-f", "--file"):
+            file = a
         else:
             assert False, "Unhandled Option"
 
     # read data and send if not listen
     if not listen and len(target) and port > 0:
-        buffer = sys.stdin.read()
-        send_data(buffer)
+        if file:
+            file_discriptor = open(file, "r")
+            send_data(file_discriptor.read())
+            file_discriptor.close()
+        else:
+            buffer = sys.stdin.read()
+            send_data(buffer)
 
     if listen:
         server_loop()
@@ -99,24 +108,26 @@ def send_data(buffer):
         # send data
         if len(buffer):
             client.send(buffer.encode())
-        while True:
-            recv_len = 1
-            response = ""
+            client.close()
+        if not file:
+            while True:
+                recv_len = 1
+                response = ""
 
-            while recv_len:
-                data = client.recv(4096)
-                recv_len = len(data)
-                response += data.decode()
+                while recv_len:
+                    data = client.recv(4096)
+                    recv_len = len(data)
+                    response += data.decode()
 
-                # last data packet
-                if recv_len < 4096:
-                    break
+                    # last data packet
+                    if recv_len < 4096:
+                        break
 
-            print(response)
-            buffer = input("")
-            buffer += "\n"
+                print(response)
+                buffer = input("")
+                buffer += "\n"
 
-            client.send(buffer.encode())
+                client.send(buffer.encode())
 
     except Exception as e:
         print(e)
@@ -145,13 +156,16 @@ def run_command(command: str) -> str:
     # affect the current process. This is how processes are designed to work. If you need your script to change to a
     # different directory you can use os.chdir which will change the directory for the current process.
     try:
-        # if
-        # if command[0:3] is "cd ":
-        #     os.chdir().
-        byte = subprocess.check_output(command, stderr=subprocess.STDOUT, shell=True)
-        the_encoding = chardet.detect(byte)['encoding']
-
-        return byte.decode(the_encoding)
+        if command[0:5] == "cd ..":
+            os.chdir("..")
+            return "Current working dir is: %s" % os.getcwd()
+        elif command[0:3] == "cd ":
+            os.chdir(command[3:len(command)])
+            return "Current working dir is: %s" % command[3:len(command)]
+        else:
+            byte = subprocess.check_output(command, stderr=subprocess.STDOUT, shell=True)
+            the_encoding = chardet.detect(byte)['encoding']
+            return byte.decode(the_encoding)
     except Exception as e:
         return e
 
@@ -165,7 +179,8 @@ def client_handler(client_socket: SocketType):
     if len(upload_destination):
         file_buffer = ""
         while True:
-            data = recv_custom(client_socket)
+            data = client_socket.recv(1024).decode()
+
             if not data:
                 break
             else:
@@ -173,10 +188,12 @@ def client_handler(client_socket: SocketType):
 
         # read file and write to destination
         try:
-            file_descriptor = open("file", "wb")
+            file_descriptor = open("file", "w")
             file_descriptor.write(file_buffer)
             file_descriptor.close()
-        except:
+            client_socket.send("Save file successfully!!!".encode())
+        except Exception as e:
+            client_socket.send(e)
             client_socket.send("Failed to save file to %s\r\n" % upload_destination)
 
     # check for execute
